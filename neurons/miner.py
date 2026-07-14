@@ -55,6 +55,14 @@ class Miner(BaseMinerNeuron):
                 "framework": metadata.get("framework", backend),
                 "license": "MIT",
                 "repo_url": "https://github.com/BranDonallenLuis/super_poker_3",
+                "artifact_url": (
+                    "https://github.com/BranDonallenLuis/super_poker_3/releases/download/"
+                    "model-20260713-185316/super_poker_3.joblib"
+                ),
+                "artifact_sha256": "f607abdeea01419631a6d5e03b870eb95c4572b3ecd1e198c8feb6890b159f53",
+                "model_card_url": (
+                    "https://github.com/BranDonallenLuis/super_poker_3/blob/main/MODEL_CARD.md"
+                ),
                 "notes": "Chronologically validated XGBoost behavioral detector with independent chunk scoring.",
                 "open_source": True,
                 "inference_mode": "local-joblib" if self.predictor else "heuristic",
@@ -67,6 +75,13 @@ class Miner(BaseMinerNeuron):
                 ),
             },
         )
+        if self.predictor is not None:
+            self.model_manifest.update(
+                {
+                    "feature_schema_sha256": metadata.get("feature_schema_sha256", ""),
+                    "validation_metrics": metadata.get("walk_forward_overall", {}),
+                }
+            )
         self.manifest_compliance = evaluate_manifest_compliance(self.model_manifest)
         self.manifest_digest = manifest_digest(self.model_manifest)
         self._log_manifest_startup(repo_root)
