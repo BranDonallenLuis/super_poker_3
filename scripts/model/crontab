@@ -1,0 +1,5 @@
+# Super Poker 3: refresh the public benchmark every day at 01:15.
+15 1 * * * SUPER_POKER_PYTHON=/home/achilles/Projects/Poker44-subnet/.venv/bin/python /home/achilles/Projects/super-poker-3/scripts/model/daily_learning.sh --train-candidate
+
+# Check hourly; train/deploy once, six hours before each 120-hour competition start.
+15 * * * * SUPER_POKER_PYTHON=/home/achilles/Projects/Poker44-subnet/.venv/bin/python /home/achilles/Projects/super-poker-3/scripts/model/cycle_learning.sh

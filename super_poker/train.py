@@ -1,0 +1,156 @@
+"""Train Super Poker 3 with chronological walk-forward evaluation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import time
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.metrics import average_precision_score
+from xgboost import XGBClassifier
+
+from super_poker.dataset import Example, load_examples
+from super_poker.features import chunk_features
+from super_poker.scoring import metrics
+
+DEFAULT_DATA = Path("../Poker44-subnet/data/raw")
+DEFAULT_ARTIFACT = Path("artifacts/super_poker_3.joblib")
+
+
+def make_model(seed: int = 44) -> XGBClassifier:
+    return XGBClassifier(
+        n_estimators=200,
+        learning_rate=0.03,
+        max_depth=3,
+        min_child_weight=5,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.5,
+        reg_lambda=2.0,
+        objective="binary:logistic",
+        eval_metric="logloss",
+        tree_method="hist",
+        n_jobs=4,
+        random_state=seed,
+    )
+
+
+def matrix(examples: list[Example], columns: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
+    frame = pd.DataFrame([chunk_features(example.hands) for example in examples]).fillna(0.0)
+    if columns is None:
+        columns = sorted(frame.columns)
+    return frame.reindex(columns=columns, fill_value=0.0).astype(float), columns
+
+
+def threshold_for_fpr(human_scores: np.ndarray, target_fpr: float) -> float:
+    if not len(human_scores):
+        return 0.5
+    return float(np.quantile(human_scores, 1.0 - target_fpr))
+
+
+def remap_threshold(scores: np.ndarray, threshold: float) -> np.ndarray:
+    threshold = min(max(float(threshold), 1e-6), 1 - 1e-6)
+    return np.clip(
+        np.where(
+            scores >= threshold,
+            0.5 + 0.5 * (scores - threshold) / (1.0 - threshold),
+            0.5 * scores / threshold,
+        ),
+        0.0,
+        1.0,
+    )
+
+
+def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: float = 0.035) -> dict:
+    examples = load_examples(data_dir)
+    dates = sorted({example.source_date for example in examples})
+    if len(dates) < folds + 2:
+        raise ValueError("At least folds + 2 release dates are required")
+    all_frame, columns = matrix(examples)
+    labels = np.asarray([example.label for example in examples], dtype=int)
+    date_array = np.asarray([example.source_date for example in examples])
+    oof = np.full(len(examples), np.nan)
+    fold_results = []
+
+    for fold_index, test_date in enumerate(dates[-folds:]):
+        train_mask = date_array < test_date
+        test_mask = date_array == test_date
+        if train_mask.sum() < 60 or len(set(labels[train_mask])) < 2:
+            continue
+        model = make_model(44 + fold_index)
+        model.fit(all_frame.loc[train_mask], labels[train_mask])
+        raw_test = model.predict_proba(all_frame.loc[test_mask])[:, 1]
+
+        earlier_dates = sorted(set(date_array[train_mask]))
+        calibration_date = earlier_dates[-1]
+        inner_fit = date_array < calibration_date
+        inner_cal = date_array == calibration_date
+        inner_model = make_model(144 + fold_index)
+        inner_model.fit(all_frame.loc[inner_fit], labels[inner_fit])
+        calibration_scores = inner_model.predict_proba(all_frame.loc[inner_cal])[:, 1]
+        threshold = threshold_for_fpr(calibration_scores[labels[inner_cal] == 0], target_fpr)
+        mapped = remap_threshold(raw_test, threshold)
+        oof[test_mask] = mapped
+        fold_results.append({"date": test_date, "threshold": threshold, **metrics(labels[test_mask], mapped)})
+
+    valid = np.isfinite(oof)
+    if not valid.any():
+        raise RuntimeError("Walk-forward evaluation produced no predictions")
+    overall = metrics(labels[valid], oof[valid])
+
+    deployment_calibration_date = dates[-1]
+    deployment_fit = date_array < deployment_calibration_date
+    calibration_mask = date_array == deployment_calibration_date
+    calibration_model = make_model(244)
+    calibration_model.fit(all_frame.loc[deployment_fit], labels[deployment_fit])
+    calibration_scores = calibration_model.predict_proba(all_frame.loc[calibration_mask])[:, 1]
+    deployment_threshold = threshold_for_fpr(
+        calibration_scores[labels[calibration_mask] == 0], target_fpr
+    )
+
+    final_model = make_model(344)
+    final_model.fit(all_frame, labels)
+    metadata = {
+        "model_name": "super-poker-3-xgboost",
+        "model_version": time.strftime("%Y%m%d-%H%M%S", time.gmtime()),
+        "framework": "xgboost",
+        "feature_version": "super-poker-3.v1",
+        "example_count": len(examples),
+        "release_dates": dates,
+        "walk_forward_dates": [result["date"] for result in fold_results],
+        "walk_forward": fold_results,
+        "walk_forward_overall": overall,
+        "target_fpr": target_fpr,
+        "deployment_threshold": deployment_threshold,
+        "calibration_release": deployment_calibration_date,
+        "feature_count": len(columns),
+        "feature_schema_sha256": hashlib.sha256("\n".join(columns).encode()).hexdigest(),
+        "training_data": "Poker44 public benchmark only; no validator-private labels",
+    }
+    artifact = {"model": final_model, "feature_names": columns, "threshold": deployment_threshold, "metadata": metadata}
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = artifact_path.with_suffix(".tmp")
+    joblib.dump(artifact, temporary)
+    temporary.replace(artifact_path)
+    artifact_path.with_suffix(".metrics.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return metadata
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
+    parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
+    parser.add_argument("--folds", type=int, default=5)
+    parser.add_argument("--target-fpr", type=float, default=0.035)
+    args = parser.parse_args()
+    metadata = train(args.data_dir, args.artifact, folds=args.folds, target_fpr=args.target_fpr)
+    print(json.dumps(metadata, indent=2))
+
+
+if __name__ == "__main__":
+    main()
