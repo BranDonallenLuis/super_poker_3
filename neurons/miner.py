@@ -54,7 +54,7 @@ class Miner(BaseMinerNeuron):
                 "model_version": metadata.get("model_version", "1"),
                 "framework": metadata.get("framework", backend),
                 "license": "MIT",
-                "repo_url": "https://github.com/BranDonallenLuis/super-poker-3",
+                "repo_url": "https://github.com/BranDonallenLuis/super_poker_3",
                 "notes": "Chronologically validated XGBoost behavioral detector with independent chunk scoring.",
                 "open_source": True,
                 "inference_mode": "local-joblib" if self.predictor else "heuristic",
