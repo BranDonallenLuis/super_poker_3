@@ -14,6 +14,7 @@ import pandas as pd
 from sklearn.metrics import average_precision_score
 from xgboost import XGBClassifier
 
+from poker44.validator.payload_view import prepare_hand_for_miner
 from super_poker.dataset import Example, load_examples
 from super_poker.features import chunk_features
 from super_poker.scoring import metrics
@@ -41,7 +42,14 @@ def make_model(seed: int = 44) -> XGBClassifier:
 
 
 def matrix(examples: list[Example], columns: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
-    frame = pd.DataFrame([chunk_features(example.hands) for example in examples]).fillna(0.0)
+    # Train on exactly what validators expose to miners. Raw benchmark hands
+    # contain outcomes, cards, original seats, and amounts that are removed or
+    # canonicalized before a DetectionSynapse is sent.
+    visible_chunks = [
+        [prepare_hand_for_miner(hand) for hand in example.hands]
+        for example in examples
+    ]
+    frame = pd.DataFrame([chunk_features(chunk) for chunk in visible_chunks]).fillna(0.0)
     if columns is None:
         columns = sorted(frame.columns)
     return frame.reindex(columns=columns, fill_value=0.0).astype(float), columns
@@ -70,7 +78,13 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
     examples = load_examples(data_dir)
     dates = sorted({example.source_date for example in examples})
     if len(dates) < folds + 2:
-        raise ValueError("At least folds + 2 release dates are required")
+        required = folds + 2
+        raise ValueError(
+            f"Training requires at least {required} distinct release dates, but "
+            f"found {len(dates)} under {data_dir.resolve()}. Download the full "
+            "history with automation --backfill, or select the existing "
+            "historical data directory."
+        )
     all_frame, columns = matrix(examples)
     labels = np.asarray([example.label for example in examples], dtype=int)
     date_array = np.asarray([example.source_date for example in examples])
@@ -116,10 +130,10 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
     final_model = make_model(344)
     final_model.fit(all_frame, labels)
     metadata = {
-        "model_name": "super-poker-3-xgboost",
+        "model_name": "super-poker-3-xgboost-enhanced",
         "model_version": time.strftime("%Y%m%d-%H%M%S", time.gmtime()),
-        "framework": "xgboost",
-        "feature_version": "super-poker-3.v1",
+        "framework": "xgboost+behavioral-regularity",
+        "feature_version": "super-poker-3.v3-validator-visible",
         "example_count": len(examples),
         "release_dates": dates,
         "walk_forward_dates": [result["date"] for result in fold_results],
@@ -130,7 +144,10 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         "calibration_release": deployment_calibration_date,
         "feature_count": len(columns),
         "feature_schema_sha256": hashlib.sha256("\n".join(columns).encode()).hexdigest(),
-        "training_data": "Poker44 public benchmark only; no validator-private labels",
+        "training_data": (
+            "Poker44 public benchmark only, projected through the validator-visible "
+            "payload sanitizer; no validator-private labels"
+        ),
     }
     artifact = {"model": final_model, "feature_names": columns, "threshold": deployment_threshold, "metadata": metadata}
     artifact_path.parent.mkdir(parents=True, exist_ok=True)

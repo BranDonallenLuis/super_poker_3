@@ -55,11 +55,10 @@ class Miner(BaseMinerNeuron):
                 "framework": metadata.get("framework", backend),
                 "license": "MIT",
                 "repo_url": "https://github.com/BranDonallenLuis/super_poker_3",
-                "artifact_url": (
-                    "https://github.com/BranDonallenLuis/super_poker_3/releases/download/"
-                    "model-20260713-185316/super_poker_3.joblib"
-                ),
-                "artifact_sha256": "f607abdeea01419631a6d5e03b870eb95c4572b3ecd1e198c8feb6890b159f53",
+                # Set POKER44_MODEL_ARTIFACT_URL after publishing this exact
+                # artifact as a release asset.
+                "artifact_url": "",
+                "artifact_sha256": "dc8dc88b011407e247bb23239b45c8fac0bcf797e2f5cd0322b5786d59c0995a",
                 "model_card_url": (
                     "https://github.com/BranDonallenLuis/super_poker_3/blob/main/MODEL_CARD.md"
                 ),

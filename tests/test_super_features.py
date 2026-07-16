@@ -1,6 +1,8 @@
 import math
 
+from super_poker.dataset import Example
 from super_poker.features import chunk_features, hand_features
+from super_poker.train import matrix
 
 
 def test_empty_features_are_stable_and_finite():
@@ -31,3 +33,19 @@ def test_labels_and_ids_do_not_change_features():
     base = {"metadata": {"hero_seat": 1}, "actions": []}
     leaked = {**base, "hand_id": "special", "label": "bot", "is_bot": True}
     assert hand_features(base) == hand_features(leaked)
+
+
+def test_training_matrix_uses_validator_visible_payload():
+    hand = {
+        "metadata": {"hero_seat": 2, "max_seats": 6, "bb": 5.0},
+        "players": [{"seat": 2, "starting_stack": 500.0, "hole_cards": ["As", "Ah"]}],
+        "streets": [{"street": "river", "board_cards": ["2c", "3d", "4h"]}],
+        "actions": [],
+        "outcome": {"showdown": True, "total_pot": 100.0},
+    }
+    example = Example([hand], 1, "2026-07-16", "train", "hash")
+
+    frame, _ = matrix([example])
+
+    assert frame.loc[0, "showdown_mean"] == 0.0
+    assert frame.loc[0, "hero_stack_mean"] != 500.0

@@ -60,6 +60,16 @@ def _top_share(values: list[Any]) -> float:
     return _divide(max(Counter(values).values()), len(values)) if values else 0.0
 
 
+def _max_run_share(values: list[Any]) -> float:
+    if not values:
+        return 0.0
+    longest = current = 1
+    for previous, value in zip(values, values[1:]):
+        current = current + 1 if value == previous else 1
+        longest = max(longest, current)
+    return _divide(longest, len(values))
+
+
 def _amount_bucket(value: float) -> int:
     limits = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 36.0, 84.0, 126.0)
     return next((index for index, limit in enumerate(limits) if value <= limit), len(limits))
@@ -84,6 +94,7 @@ def hand_features(hand: dict[str, Any]) -> dict[str, float]:
     counts, hero_counts = Counter(types), Counter(hero_types)
     meaningful = sum(counts[action] for action in ACTIONS)
     hero_meaningful = sum(hero_counts[action] for action in ACTIONS)
+    passive = counts["call"] + counts["check"]
 
     amounts = [max(0.0, _number(a.get("normalized_amount_bb"))) for a in hero_actions]
     aggressive_amounts = [
@@ -106,6 +117,14 @@ def hand_features(hand: dict[str, Any]) -> dict[str, float]:
     )
     preflop_hero = [a for a in hero_actions if str(a.get("street") or "").lower() == "preflop"]
     preflop_types = [str(a.get("action_type") or "").lower() for a in preflop_hero]
+    all_amounts = [max(0.0, _number(a.get("normalized_amount_bb"))) for a in actions]
+    pot_before = [max(0.0, _number(a.get("pot_before"))) for a in actions]
+    pot_after = [max(0.0, _number(a.get("pot_after"))) for a in actions]
+    pot_deltas = [max(0.0, after - before) for before, after in zip(pot_before, pot_after)]
+    monotonic_steps = sum(
+        current + 1e-9 >= previous
+        for previous, current in zip(pot_after, pot_after[1:])
+    )
     prior_preflop_raises = 0
     three_bet = 0.0
     for action in actions:
@@ -144,10 +163,31 @@ def hand_features(hand: dict[str, Any]) -> dict[str, float]:
         "street_entropy": _entropy(action_streets),
         "action_switch_rate": _switch_rate(types),
         "actor_switch_rate": _switch_rate(actors),
+        "action_run_max_share": _max_run_share(types),
+        "actor_run_max_share": _max_run_share(actors),
+        "unique_actor_share": _divide(len(set(actors)), len(players)),
         "hero_action_entropy": _entropy(hero_types),
         "hero_action_switch_rate": _switch_rate(hero_types),
         "aggression_rate": _divide(hero_counts["bet"] + hero_counts["raise"], hero_meaningful),
         "aggression_factor": _divide(hero_counts["bet"] + hero_counts["raise"], hero_counts["call"]),
+        "passive_action_share": _divide(passive, len(actions)),
+        "blind_action_share": _divide(
+            counts["small_blind"] + counts["big_blind"] + counts["ante"], len(actions)
+        ),
+        "all_in_action_share": _divide(counts["all_in"], len(actions)),
+        "nonzero_amount_share": _divide(sum(value > 0 for value in all_amounts), len(actions)),
+        "pot_delta_mean": _mean(pot_deltas),
+        "pot_delta_std": _std(pot_deltas),
+        "pot_growth": (
+            max(pot_after) - min(pot_before) if pot_after and pot_before else 0.0
+        ),
+        "pot_monotonic_rate": _divide(monotonic_steps, len(pot_after) - 1),
+        "raise_to_present_share": _divide(
+            sum(a.get("raise_to") is not None for a in actions), len(actions)
+        ),
+        "call_to_present_share": _divide(
+            sum(a.get("call_to") is not None for a in actions), len(actions)
+        ),
         "vpip": float(any(kind in {"call", "bet", "raise"} for kind in preflop_types)),
         "pfr": float("raise" in preflop_types),
         "three_bet": three_bet,

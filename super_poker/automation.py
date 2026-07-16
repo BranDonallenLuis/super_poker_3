@@ -193,7 +193,8 @@ def run(
 
 def run_cycle(
     data_dir: Path, artifacts: Path, *, force: bool = False,
-    download: bool = True, now: datetime | None = None,
+    download: bool = True, backfill: bool = False,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Run at most once for the upcoming 120-hour competition boundary."""
     status = cycle_status(now)
@@ -204,7 +205,9 @@ def run_cycle(
     if not force and not status["due"]:
         return {"mode": "cycle", "cycle": status, "skipped": "outside_deployment_window"}
 
-    result = run("cycle", data_dir, artifacts, download=download)
+    result = run(
+        "cycle", data_dir, artifacts, download=download, backfill=backfill
+    )
     result["cycle"] = status
     result["completed_cycle_id"] = status["cycle_id"]
     cycle_state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +231,7 @@ def main() -> None:
     if args.mode == "cycle":
         result = run_cycle(
             args.data_dir, args.artifacts, force=args.force_cycle,
-            download=not args.no_download,
+            download=not args.no_download, backfill=args.backfill,
         )
     else:
         result = run(args.mode, args.data_dir, args.artifacts, download=not args.no_download,

@@ -20,6 +20,13 @@ def add_args(cls, parser: argparse.ArgumentParser) -> None:
     bt.Axon.add_args(parser)
     
     parser.add_argument("--netuid", type=int, help="Subnet netuid", default=126)
+
+    parser.add_argument(
+        "--neuron.name",
+        type=str,
+        default=cls.neuron_type,
+        help="Neuron name used for the local logging and state directory.",
+    )
     
     parser.add_argument(
         "--neuron.device",
@@ -190,4 +197,24 @@ def check_config(cls, config: "bt.Config"):
 def config(cls) -> bt.Config:
     parser = argparse.ArgumentParser()
     cls.add_args(parser)
-    return bt.Config(parser=parser)
+    namespace, _ = parser.parse_known_args()
+    parsed = bt.Config(parser=parser)
+
+    # Some Bittensor releases no longer expand custom dotted argparse
+    # destinations into nested Config objects. Hydrate them explicitly while
+    # preserving the command-line values parsed by argparse.
+    for dotted_key, value in vars(namespace).items():
+        if "." not in dotted_key:
+            setattr(parsed, dotted_key, value)
+            continue
+        parts = dotted_key.split(".")
+        node = parsed
+        for part in parts[:-1]:
+            child = getattr(node, part, None)
+            if child is None:
+                child = bt.Config()
+                setattr(node, part, child)
+            node = child
+        setattr(node, parts[-1], value)
+
+    return parsed
