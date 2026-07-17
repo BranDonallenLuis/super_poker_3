@@ -2,6 +2,7 @@
 
 # from __future__ import annotations
 
+import hashlib
 import os
 import time
 from collections import Counter
@@ -40,6 +41,7 @@ class Miner(BaseMinerNeuron):
             except Exception as exc:
                 bt.logging.error(f"Unable to load {self.model_path}: {exc}")
         backend = "xgboost" if self.predictor is not None else "heuristic-fallback"
+        artifact_sha256 = self._sha256_file(self.model_path) if self.predictor else ""
         bt.logging.info(f"Super Poker 3 miner started | backend={backend}")
         metadata = self.predictor.metadata if self.predictor is not None else {}
         self.model_manifest = build_local_model_manifest(
@@ -58,7 +60,7 @@ class Miner(BaseMinerNeuron):
                 # Set POKER44_MODEL_ARTIFACT_URL after publishing this exact
                 # artifact as a release asset.
                 "artifact_url": "",
-                "artifact_sha256": "dc8dc88b011407e247bb23239b45c8fac0bcf797e2f5cd0322b5786d59c0995a",
+                "artifact_sha256": artifact_sha256,
                 "model_card_url": (
                     "https://github.com/BranDonallenLuis/super_poker_3/blob/main/MODEL_CARD.md"
                 ),
@@ -94,6 +96,14 @@ class Miner(BaseMinerNeuron):
         # bt.logging.info("Attaching forward function to miner axon.")
         
         bt.logging.info(f"Axon created: {self.axon}")
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
 
     def _log_manifest_startup(self, repo_root: Path) -> None:
         bt.logging.info("Open-sourced miner manifest standard active for this miner.")
