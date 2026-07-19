@@ -1,5 +1,13 @@
 # Super Poker 3 Model Card
 
+## Live-score-driven development
+
+Competition scores are recorded against the exact model version and artifact hash in
+`config/live_scores.json`. They guide distribution-shift investigation and feature design,
+but are never treated as per-example labels. The R3 reform adds exact validator-visible
+amount buckets, hero-independent action/actor/street/amount signatures, and same-date,
+same-label 90-105-hand training augmentation while retaining real-only chronological tests.
+
 ## Model identity
 
 - Model: `super-poker-3-xgboost`

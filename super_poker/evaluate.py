@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from poker44.validator.payload_view import prepare_hand_for_miner
 from super_poker.dataset import load_examples
 from super_poker.inference import SuperPokerModel
 from super_poker.scoring import metrics
@@ -20,7 +21,13 @@ def main() -> None:
     selected = {value.strip() for value in (args.dates or "").split(",") if value.strip()}
     examples = [e for e in load_examples(args.data_dir) if not selected or e.source_date in selected]
     model = SuperPokerModel(args.artifact)
-    scores = model.predict_chunk_scores([example.hands for example in examples])
+    # Benchmark files contain fields and precision that miners never receive.
+    # Project through the exact validator payload before standalone evaluation.
+    chunks = [
+        [prepare_hand_for_miner(hand) for hand in example.hands]
+        for example in examples
+    ]
+    scores = model.predict_chunk_scores(chunks)
     result = metrics([example.label for example in examples], scores)
     result["example_count"] = len(examples)
     result["dates"] = sorted({example.source_date for example in examples})

@@ -8,6 +8,10 @@ from typing import Any, Iterable
 
 ACTIONS = ("fold", "check", "call", "bet", "raise")
 STREETS = ("preflop", "flop", "turn", "river")
+VISIBLE_BB_BUCKETS = (
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+    8.0, 12.0, 16.0, 24.0, 36.0, 56.0, 84.0, 126.0,
+)
 
 
 def _number(value: Any) -> float:
@@ -71,8 +75,7 @@ def _max_run_share(values: list[Any]) -> float:
 
 
 def _amount_bucket(value: float) -> int:
-    limits = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 36.0, 84.0, 126.0)
-    return next((index for index, limit in enumerate(limits) if value <= limit), len(limits))
+    return min(range(len(VISIBLE_BB_BUCKETS)), key=lambda i: abs(VISIBLE_BB_BUCKETS[i] - value))
 
 
 def hand_features(hand: dict[str, Any]) -> dict[str, float]:
@@ -118,6 +121,7 @@ def hand_features(hand: dict[str, Any]) -> dict[str, float]:
     preflop_hero = [a for a in hero_actions if str(a.get("street") or "").lower() == "preflop"]
     preflop_types = [str(a.get("action_type") or "").lower() for a in preflop_hero]
     all_amounts = [max(0.0, _number(a.get("normalized_amount_bb"))) for a in actions]
+    amount_buckets = [_amount_bucket(value) for value in all_amounts]
     pot_before = [max(0.0, _number(a.get("pot_before"))) for a in actions]
     pot_after = [max(0.0, _number(a.get("pot_after"))) for a in actions]
     pot_deltas = [max(0.0, after - before) for before, after in zip(pot_before, pot_after)]
@@ -176,6 +180,11 @@ def hand_features(hand: dict[str, Any]) -> dict[str, float]:
         ),
         "all_in_action_share": _divide(counts["all_in"], len(actions)),
         "nonzero_amount_share": _divide(sum(value > 0 for value in all_amounts), len(actions)),
+        "table_amount_bucket_mean": _mean(amount_buckets),
+        "table_amount_bucket_std": _std(amount_buckets),
+        "table_amount_bucket_entropy": _entropy(amount_buckets),
+        "table_amount_bucket_top_share": _top_share(amount_buckets),
+        "table_amount_bucket_unique_share": _divide(len(set(amount_buckets)), len(amount_buckets)),
         "pot_delta_mean": _mean(pot_deltas),
         "pot_delta_std": _std(pot_deltas),
         "pot_growth": (
@@ -238,18 +247,31 @@ def chunk_features(chunk: list[dict[str, Any]]) -> dict[str, float]:
     for name in sorted(template):
         _aggregate(name, [row[name] for row in rows], output)
 
-    action_signatures, role_signatures, amount_signatures = [], [], []
+    action_signatures, actor_signatures, role_signatures = [], [], []
+    street_signatures, amount_signatures, joint_signatures = [], [], []
     for hand in hands:
         metadata = hand.get("metadata") or {}
         hero = int(_number(metadata.get("hero_seat")))
         actions = [a for a in (hand.get("actions") or []) if isinstance(a, dict)]
-        action_signatures.append(tuple(str(a.get("action_type") or "").lower() for a in actions))
+        action_signature = tuple(str(a.get("action_type") or "").lower() for a in actions)
+        actor_signature = tuple(int(_number(a.get("actor_seat"))) for a in actions)
+        street_signature = tuple(str(a.get("street") or "").lower() for a in actions)
+        amount_signature = tuple(
+            _amount_bucket(max(0.0, _number(a.get("normalized_amount_bb")))) for a in actions
+        )
+        action_signatures.append(action_signature)
+        actor_signatures.append(actor_signature)
         role_signatures.append(tuple("H" if int(_number(a.get("actor_seat"))) == hero else "O" for a in actions))
-        amount_signatures.append(tuple(_amount_bucket(max(0.0, _number(a.get("normalized_amount_bb")))) for a in actions))
+        street_signatures.append(street_signature)
+        amount_signatures.append(amount_signature)
+        joint_signatures.append(tuple(zip(action_signature, street_signature, amount_signature)))
     for name, signatures in (
         ("action_signature", action_signatures),
+        ("actor_signature", actor_signatures),
         ("role_signature", role_signatures),
+        ("street_signature", street_signatures),
         ("amount_signature", amount_signatures),
+        ("joint_signature", joint_signatures),
     ):
         output[f"{name}_top_share"] = _top_share(signatures)
         output[f"{name}_unique_share"] = _divide(len(set(signatures)), len(signatures))

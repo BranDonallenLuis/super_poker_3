@@ -1,0 +1,13 @@
+[
+  {
+    "competition_round": "R3",
+    "live_score": 0.481,
+    "model_name": "super-poker-3-xgboost-enhanced",
+    "model_version": "20260717-131959",
+    "artifact_sha256": "28db45dc8cfb4a9609c0bbf889667d8d08b7352fb93f4c40243fecf4b18648a7",
+    "offline_reward": 0.8952766117132066,
+    "recorded_at": "2026-07-18",
+    "source": "user-reported Poker44 leaderboard",
+    "diagnosis": "Large offline/live transfer gap; score is context, not a training label."
+  }
+]

@@ -1,8 +1,8 @@
 import math
 
 from super_poker.dataset import Example
-from super_poker.features import chunk_features, hand_features
-from super_poker.train import matrix
+from super_poker.features import VISIBLE_BB_BUCKETS, _amount_bucket, chunk_features, hand_features
+from super_poker.train import augment_live_size_chunks, matrix
 
 
 def test_empty_features_are_stable_and_finite():
@@ -49,3 +49,31 @@ def test_training_matrix_uses_validator_visible_payload():
 
     assert frame.loc[0, "showdown_mean"] == 0.0
     assert frame.loc[0, "hero_stack_mean"] != 500.0
+
+
+def test_amount_buckets_match_validator_grid():
+    assert VISIBLE_BB_BUCKETS[_amount_bucket(1.47)] == 1.5
+    assert VISIBLE_BB_BUCKETS[_amount_bucket(5.9)] == 6.0
+    assert VISIBLE_BB_BUCKETS[_amount_bucket(55.0)] == 56.0
+
+
+def test_chunk_features_include_hero_independent_signatures():
+    chunk = [{"metadata": {"hero_seat": 6}, "actions": [
+        {"actor_seat": 1, "action_type": "raise", "street": "preflop", "normalized_amount_bb": 3.1},
+        {"actor_seat": 2, "action_type": "call", "street": "preflop", "normalized_amount_bb": 3.0},
+    ]}] * 2
+    values = chunk_features(chunk)
+    assert values["actor_signature_top_share"] == 1.0
+    assert values["street_signature_top_share"] == 1.0
+    assert values["joint_signature_top_share"] == 1.0
+
+
+def test_live_size_augmentation_stays_within_date_and_label():
+    examples = [
+        Example([{"i": i}] * 40, label, "2026-07-18", "train", f"{label}-{i}")
+        for label in (0, 1) for i in range(3)
+    ]
+    augmented = augment_live_size_chunks(examples)
+    assert len(augmented) == 6
+    assert all(90 <= len(example.hands) <= 105 for example in augmented)
+    assert all(example.source_date == "2026-07-18" for example in augmented)
