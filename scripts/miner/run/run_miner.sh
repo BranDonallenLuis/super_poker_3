@@ -3,14 +3,13 @@
 # Poker44 Miner Startup Script
 
 NETUID="${NETUID:-126}"
-WALLET_NAME="${WALLET_NAME:-super_poker}"
-HOTKEY="${HOTKEY:-miner-super-poker}"
+WALLET_NAME="${WALLET_NAME:-poker44-miner-ck}"
+HOTKEY="${HOTKEY:-poker44-miner-hk}"
 NETWORK="${NETWORK:-finney}"
 MINER_SCRIPT="${MINER_SCRIPT:-./neurons/miner.py}"
-PM2_NAME="${PM2_NAME:-super_poker_3}"
-AXON_PORT="${AXON_PORT:-7027}"
+PM2_NAME="${PM2_NAME:-poker44_miner}"  ##  name of Miner, as you wish
+AXON_PORT="${AXON_PORT:-8091}"
 ALLOWED_VALIDATOR_HOTKEYS="${ALLOWED_VALIDATOR_HOTKEYS:-}"
-PYTHON_BIN="${SUPER_POKER_PYTHON:-python}"
 
 if [ ! -f "$MINER_SCRIPT" ]; then
     echo "Error: Miner script not found at $MINER_SCRIPT"
@@ -21,9 +20,6 @@ if ! command -v pm2 &> /dev/null; then
     echo "Error: PM2 is not installed"
     exit 1
 fi
-
-echo "Running source/artifact compatibility preflight..."
-"$PYTHON_BIN" scripts/model/preflight.py
 
 pm2 delete $PM2_NAME 2>/dev/null || true
 
