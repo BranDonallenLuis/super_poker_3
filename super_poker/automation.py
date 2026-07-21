@@ -26,6 +26,7 @@ class Gates:
     max_reward_regression: float = 0.002
     max_ap_regression: float = 0.002
     min_fold_reward: float = 0.80
+    max_fold_hard_fpr: float = 0.10
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,9 @@ def assess_candidate(
     fold_rewards = [float(fold["reward"]) for fold in candidate.get("walk_forward") or []]
     if not fold_rewards or min(fold_rewards) < gates.min_fold_reward:
         reasons.append("unstable_or_missing_walk_forward_fold")
+    fold_hard_fprs = [float(fold["hard_fpr"]) for fold in candidate.get("walk_forward") or []]
+    if not fold_hard_fprs or max(fold_hard_fprs) > gates.max_fold_hard_fpr:
+        reasons.append("walk_forward_fold_hard_fpr_above_limit")
     if incumbent:
         previous = incumbent["walk_forward_overall"]
         if current["reward"] < previous["reward"] - gates.max_reward_regression:

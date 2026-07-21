@@ -19,7 +19,7 @@ def metadata(reward=0.88, ap=0.93, fpr=0.04, hard_fpr=0.04, folds=(0.85, 0.9)):
             "fpr": fpr,
             "hard_fpr": hard_fpr,
         },
-        "walk_forward": [{"reward": value} for value in folds],
+        "walk_forward": [{"reward": value, "hard_fpr": hard_fpr} for value in folds],
     }
 
 
@@ -36,6 +36,14 @@ def test_unstable_fold_is_rejected():
     decision = assess_candidate(metadata(folds=(0.9, 0.2)), None, Gates())
     assert not decision["approved"]
     assert "unstable_or_missing_walk_forward_fold" in decision["reasons"]
+
+
+def test_high_hard_fpr_in_any_fold_is_rejected():
+    candidate = metadata()
+    candidate["walk_forward"][1]["hard_fpr"] = 0.2
+    decision = assess_candidate(candidate, None, Gates())
+    assert not decision["approved"]
+    assert "walk_forward_fold_hard_fpr_above_limit" in decision["reasons"]
 
 
 def test_promotion_backs_up_model_and_metrics(tmp_path):

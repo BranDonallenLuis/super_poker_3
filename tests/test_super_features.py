@@ -2,7 +2,9 @@ import math
 
 from super_poker.dataset import Example
 from super_poker.features import VISIBLE_BB_BUCKETS, _amount_bucket, chunk_features, hand_features
-from super_poker.train import augment_live_size_chunks, matrix
+import numpy as np
+
+from super_poker.train import augment_live_size_chunks, conservative_release_threshold, matrix
 
 
 def test_empty_features_are_stable_and_finite():
@@ -77,3 +79,13 @@ def test_live_size_augmentation_stays_within_date_and_label():
     assert len(augmented) == 6
     assert all(90 <= len(example.hands) <= 105 for example in augmented)
     assert all(example.source_date == "2026-07-18" for example in augmented)
+
+
+def test_conservative_threshold_uses_strictest_release():
+    scores = np.asarray([0.1, 0.2, 0.7, 0.8, 0.99])
+    labels = np.asarray([0, 0, 0, 0, 1])
+    dates = np.asarray(["d1", "d1", "d2", "d2", "d2"])
+
+    threshold = conservative_release_threshold(scores, labels, dates, target_fpr=0.5)
+
+    assert threshold == 0.85

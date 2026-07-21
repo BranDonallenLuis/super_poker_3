@@ -9,5 +9,16 @@
     "recorded_at": "2026-07-18",
     "source": "user-reported Poker44 leaderboard",
     "diagnosis": "Large offline/live transfer gap; score is context, not a training label."
+  },
+  {
+    "competition_round": "2026-07-21 reported round",
+    "live_score": 0.0,
+    "model_name": "super-poker-3-xgboost-enhanced",
+    "model_version": "20260719-014414",
+    "artifact_sha256": "4273fbb1018a8e3fd74d16b3ffae3bc5b4f274de013986726be5c728f812433e",
+    "offline_reward": 0.9121907206021741,
+    "recorded_at": "2026-07-21",
+    "source": "user-reported Poker44 leaderboard and miner logs",
+    "diagnosis": "Miner was reachable and returned valid 100/120-chunk probability arrays; treat zero as an offline/live scoring-gap signal, not a per-example training label."
   }
 ]

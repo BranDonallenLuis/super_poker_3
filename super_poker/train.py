@@ -25,6 +25,8 @@ DEFAULT_ARTIFACT = Path("artifacts/super_poker_3.joblib")
 LIVE_SCORE_HISTORY = Path("config/live_scores.json")
 LIVE_CHUNK_RANGE = (90, 105)
 LIVE_CHUNKS_PER_DATE_LABEL = 3
+CALIBRATION_RELEASES = 3
+CALIBRATION_SAFETY_MARGIN = 0.10
 
 
 def make_model(seed: int = 44) -> XGBClassifier:
@@ -104,6 +106,17 @@ def threshold_for_fpr(human_scores: np.ndarray, target_fpr: float) -> float:
     return float(np.quantile(human_scores, 1.0 - target_fpr))
 
 
+def conservative_release_threshold(
+    scores: np.ndarray, labels: np.ndarray, dates: np.ndarray, target_fpr: float
+) -> float:
+    """Use the strictest human threshold across recent calibration releases."""
+    thresholds = [
+        threshold_for_fpr(scores[(dates == date) & (labels == 0)], target_fpr)
+        for date in sorted(set(dates))
+    ]
+    return min(1.0 - 1e-6, max(thresholds, default=0.5) + CALIBRATION_SAFETY_MARGIN)
+
+
 def remap_threshold(scores: np.ndarray, threshold: float) -> np.ndarray:
     threshold = min(max(float(threshold), 1e-6), 1 - 1e-6)
     return np.clip(
@@ -149,13 +162,18 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         raw_test = model.predict_proba(all_frame.iloc[:real_count].loc[test_mask])[:, 1]
 
         earlier_dates = sorted(set(date_array[train_mask]))
-        calibration_date = earlier_dates[-1]
-        inner_fit = date_array < calibration_date
-        inner_cal = real_dates == calibration_date
+        calibration_dates = earlier_dates[-CALIBRATION_RELEASES:]
+        inner_fit = date_array < calibration_dates[0]
+        inner_cal = np.isin(real_dates, calibration_dates)
         inner_model = make_model(144 + fold_index)
         inner_model.fit(all_frame.loc[inner_fit], labels[inner_fit])
         calibration_scores = inner_model.predict_proba(all_frame.iloc[:real_count].loc[inner_cal])[:, 1]
-        threshold = threshold_for_fpr(calibration_scores[real_labels[inner_cal] == 0], target_fpr)
+        threshold = conservative_release_threshold(
+            calibration_scores,
+            real_labels[inner_cal],
+            real_dates[inner_cal],
+            target_fpr,
+        )
         mapped = remap_threshold(raw_test, threshold)
         oof[test_mask] = mapped
         fold_results.append({"date": test_date, "threshold": threshold, **metrics(real_labels[test_mask], mapped)})
@@ -165,14 +183,18 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         raise RuntimeError("Walk-forward evaluation produced no predictions")
     overall = metrics(real_labels[valid], oof[valid])
 
-    deployment_calibration_date = dates[-1]
-    deployment_fit = date_array < deployment_calibration_date
-    calibration_mask = real_dates == deployment_calibration_date
+    deployment_calibration_dates = dates[-CALIBRATION_RELEASES:]
+    deployment_calibration_date = deployment_calibration_dates[-1]
+    deployment_fit = date_array < deployment_calibration_dates[0]
+    calibration_mask = np.isin(real_dates, deployment_calibration_dates)
     calibration_model = make_model(244)
     calibration_model.fit(all_frame.loc[deployment_fit], labels[deployment_fit])
     calibration_scores = calibration_model.predict_proba(all_frame.iloc[:real_count].loc[calibration_mask])[:, 1]
-    deployment_threshold = threshold_for_fpr(
-        calibration_scores[real_labels[calibration_mask] == 0], target_fpr
+    deployment_threshold = conservative_release_threshold(
+        calibration_scores,
+        real_labels[calibration_mask],
+        real_dates[calibration_mask],
+        target_fpr,
     )
 
     final_model = make_model(344)
@@ -181,7 +203,7 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         "model_name": "super-poker-3-xgboost-enhanced",
         "model_version": time.strftime("%Y%m%d-%H%M%S", time.gmtime()),
         "framework": "xgboost+validator-stable-signatures+live-size-augmentation",
-        "feature_version": "super-poker-3.v4-r3-live-gap",
+        "feature_version": "super-poker-3.v5-stable-calibration",
         "example_count": len(examples),
         "augmented_example_count": len(augmented),
         "augmentation": {
@@ -196,12 +218,13 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         "target_fpr": target_fpr,
         "deployment_threshold": deployment_threshold,
         "calibration_release": deployment_calibration_date,
+        "calibration_releases": deployment_calibration_dates,
         "feature_count": len(columns),
         "feature_schema_sha256": hashlib.sha256("\n".join(columns).encode()).hexdigest(),
         "live_score_context": live_score_context(),
         "change_reason": (
-            "R3 live reward 0.481 exposed an offline/live transfer gap; add exact validator "
-            "amount buckets, hero-independent signatures, and live-size training groups."
+            "Live score 0.000 despite healthy accepted requests exposed unstable single-release "
+            "threshold calibration; use the strictest threshold across recent releases."
         ),
         "training_data": (
             "Poker44 public benchmark only, projected through the validator-visible "
