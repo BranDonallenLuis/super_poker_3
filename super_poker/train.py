@@ -12,11 +12,13 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import average_precision_score
+from sklearn.ensemble import ExtraTreesClassifier
 from xgboost import XGBClassifier
 
 from poker44.validator.payload_view import prepare_hand_for_miner
 from super_poker.dataset import Example, load_examples
+from super_poker.ensemble import ProbabilityEnsemble
+from super_poker.feature_policy import feature_policy_report, validator_stable_features
 from super_poker.features import chunk_features
 from super_poker.scoring import metrics
 
@@ -27,6 +29,10 @@ LIVE_CHUNK_RANGE = (90, 105)
 LIVE_CHUNKS_PER_DATE_LABEL = 3
 CALIBRATION_RELEASES = 3
 CALIBRATION_SAFETY_MARGIN = 0.10
+XGBOOST_SEEDS = (44, 144, 244)
+ENSEMBLE_WEIGHTS = (0.25, 0.25, 0.25, 0.25)
+CALIBRATION_TARGET_GRID = (0.01, 0.02, 0.035)
+CALIBRATION_MARGIN_GRID = (0.05, 0.10, 0.15)
 
 
 def make_model(seed: int = 44) -> XGBClassifier:
@@ -45,6 +51,49 @@ def make_model(seed: int = 44) -> XGBClassifier:
         n_jobs=4,
         random_state=seed,
     )
+
+
+def make_ensemble(seed_offset: int = 0) -> ProbabilityEnsemble:
+    models: list[object] = [make_model(seed + seed_offset) for seed in XGBOOST_SEEDS]
+    models.append(ExtraTreesClassifier(
+        n_estimators=300,
+        min_samples_leaf=3,
+        max_features=0.7,
+        class_weight="balanced",
+        n_jobs=4,
+        random_state=544 + seed_offset,
+    ))
+    return ProbabilityEnsemble(models, ENSEMBLE_WEIGHTS)
+
+
+def build_model(model_family: str, seed_offset: int = 0) -> object:
+    if model_family == "xgboost":
+        return make_model(44 + seed_offset)
+    if model_family == "ensemble":
+        return make_ensemble(seed_offset)
+    raise ValueError(f"Unknown model family: {model_family}")
+
+
+def fit_model(model: object, frame: pd.DataFrame, labels: np.ndarray) -> None:
+    if isinstance(model, ProbabilityEnsemble):
+        for learner in model.models:
+            learner.fit(frame, labels)
+    else:
+        model.fit(frame, labels)
+
+
+def prediction_stability(model: object, frame: pd.DataFrame) -> dict[str, float]:
+    if not isinstance(model, ProbabilityEnsemble):
+        return {}
+    predictions = np.stack(
+        [np.asarray(learner.predict_proba(frame), dtype=float)[:, 1] for learner in model.models],
+        axis=1,
+    )
+    dispersion = np.std(predictions, axis=1)
+    return {
+        "component_std_mean": float(np.mean(dispersion)),
+        "component_std_max": float(np.max(dispersion)),
+    }
 
 
 def matrix(examples: list[Example], columns: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
@@ -107,14 +156,15 @@ def threshold_for_fpr(human_scores: np.ndarray, target_fpr: float) -> float:
 
 
 def conservative_release_threshold(
-    scores: np.ndarray, labels: np.ndarray, dates: np.ndarray, target_fpr: float
+    scores: np.ndarray, labels: np.ndarray, dates: np.ndarray, target_fpr: float,
+    safety_margin: float = CALIBRATION_SAFETY_MARGIN,
 ) -> float:
     """Use the strictest human threshold across recent calibration releases."""
     thresholds = [
         threshold_for_fpr(scores[(dates == date) & (labels == 0)], target_fpr)
         for date in sorted(set(dates))
     ]
-    return min(1.0 - 1e-6, max(thresholds, default=0.5) + CALIBRATION_SAFETY_MARGIN)
+    return min(1.0 - 1e-6, max(thresholds, default=0.5) + safety_margin)
 
 
 def remap_threshold(scores: np.ndarray, threshold: float) -> np.ndarray:
@@ -130,7 +180,52 @@ def remap_threshold(scores: np.ndarray, threshold: float) -> np.ndarray:
     )
 
 
-def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: float = 0.035) -> dict:
+def select_calibration(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    dates: np.ndarray,
+    *,
+    target_fprs: tuple[float, ...] = CALIBRATION_TARGET_GRID,
+    safety_margins: tuple[float, ...] = CALIBRATION_MARGIN_GRID,
+) -> dict[str, float]:
+    """Choose from a bounded, predetermined grid on past releases only."""
+    candidates = []
+    for target_fpr in target_fprs:
+        for safety_margin in safety_margins:
+            threshold = conservative_release_threshold(
+                scores, labels, dates, target_fpr, safety_margin
+            )
+            candidate_metrics = metrics(labels, remap_threshold(scores, threshold))
+            candidates.append({
+                "threshold": threshold,
+                "target_fpr": target_fpr,
+                "safety_margin": safety_margin,
+                **candidate_metrics,
+            })
+    eligible = [
+        candidate for candidate in candidates
+        if candidate["fpr"] <= 0.05 and candidate["hard_fpr"] <= 0.06
+    ] or candidates
+    return max(
+        eligible,
+        key=lambda candidate: (
+            candidate["reward"],
+            candidate["average_precision"],
+            candidate["hard_bot_recall"],
+            -candidate["hard_fpr"],
+            -candidate["threshold"],
+        ),
+    )
+
+
+def train(
+    data_dir: Path,
+    artifact_path: Path,
+    *,
+    folds: int = 5,
+    target_fpr: float = 0.035,
+    model_family: str = "xgboost",
+) -> dict:
     examples = load_examples(data_dir)
     dates = sorted({example.source_date for example in examples})
     if len(dates) < folds + 2:
@@ -143,7 +238,13 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         )
     augmented = augment_live_size_chunks(examples)
     training_examples = examples + augmented
-    all_frame, columns = matrix(training_examples)
+    all_frame, all_columns = matrix(training_examples)
+    columns = (
+        validator_stable_features(all_columns)
+        if model_family == "ensemble"
+        else all_columns
+    )
+    all_frame = all_frame.reindex(columns=columns, fill_value=0.0)
     labels = np.asarray([example.label for example in training_examples], dtype=int)
     date_array = np.asarray([example.source_date for example in training_examples])
     real_count = len(examples)
@@ -157,26 +258,34 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         test_mask = real_dates == test_date
         if train_mask.sum() < 60 or len(set(labels[train_mask])) < 2:
             continue
-        model = make_model(44 + fold_index)
-        model.fit(all_frame.loc[train_mask], labels[train_mask])
+        model = build_model(model_family, fold_index * 1000)
+        fit_model(model, all_frame.loc[train_mask], labels[train_mask])
         raw_test = model.predict_proba(all_frame.iloc[:real_count].loc[test_mask])[:, 1]
 
         earlier_dates = sorted(set(date_array[train_mask]))
         calibration_dates = earlier_dates[-CALIBRATION_RELEASES:]
         inner_fit = date_array < calibration_dates[0]
         inner_cal = np.isin(real_dates, calibration_dates)
-        inner_model = make_model(144 + fold_index)
-        inner_model.fit(all_frame.loc[inner_fit], labels[inner_fit])
+        inner_model = build_model(model_family, 10000 + fold_index * 1000)
+        fit_model(inner_model, all_frame.loc[inner_fit], labels[inner_fit])
         calibration_scores = inner_model.predict_proba(all_frame.iloc[:real_count].loc[inner_cal])[:, 1]
-        threshold = conservative_release_threshold(
+        calibration = select_calibration(
             calibration_scores,
             real_labels[inner_cal],
             real_dates[inner_cal],
-            target_fpr,
+            target_fprs=tuple(sorted(set((*CALIBRATION_TARGET_GRID, target_fpr)))),
         )
+        threshold = calibration["threshold"]
         mapped = remap_threshold(raw_test, threshold)
         oof[test_mask] = mapped
-        fold_results.append({"date": test_date, "threshold": threshold, **metrics(real_labels[test_mask], mapped)})
+        fold_results.append({
+            "date": test_date,
+            "threshold": threshold,
+            "calibration_target_fpr": calibration["target_fpr"],
+            "calibration_safety_margin": calibration["safety_margin"],
+            **prediction_stability(model, all_frame.iloc[:real_count].loc[test_mask]),
+            **metrics(real_labels[test_mask], mapped),
+        })
 
     valid = np.isfinite(oof)
     if not valid.any():
@@ -187,23 +296,32 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
     deployment_calibration_date = deployment_calibration_dates[-1]
     deployment_fit = date_array < deployment_calibration_dates[0]
     calibration_mask = np.isin(real_dates, deployment_calibration_dates)
-    calibration_model = make_model(244)
-    calibration_model.fit(all_frame.loc[deployment_fit], labels[deployment_fit])
+    calibration_model = build_model(model_family, 20000)
+    fit_model(calibration_model, all_frame.loc[deployment_fit], labels[deployment_fit])
     calibration_scores = calibration_model.predict_proba(all_frame.iloc[:real_count].loc[calibration_mask])[:, 1]
-    deployment_threshold = conservative_release_threshold(
+    deployment_calibration = select_calibration(
         calibration_scores,
         real_labels[calibration_mask],
         real_dates[calibration_mask],
-        target_fpr,
+        target_fprs=tuple(sorted(set((*CALIBRATION_TARGET_GRID, target_fpr)))),
     )
+    deployment_threshold = deployment_calibration["threshold"]
 
-    final_model = make_model(344)
-    final_model.fit(all_frame, labels)
+    final_model = build_model(model_family, 30000)
+    fit_model(final_model, all_frame, labels)
     metadata = {
         "model_name": "super-poker-3-xgboost-enhanced",
         "model_version": time.strftime("%Y%m%d-%H%M%S", time.gmtime()),
-        "framework": "xgboost+validator-stable-signatures+live-size-augmentation",
-        "feature_version": "super-poker-3.v5-stable-calibration",
+        "framework": (
+            "multi-seed-xgboost+extratrees-fixed-blend"
+            if model_family == "ensemble"
+            else "xgboost+chronological-calibration-search"
+        ),
+        "feature_version": (
+            "super-poker-3.v6-ensemble-drift-policy"
+            if model_family == "ensemble"
+            else "super-poker-3.v6-xgboost-safe-default"
+        ),
         "example_count": len(examples),
         "augmented_example_count": len(augmented),
         "augmentation": {
@@ -217,14 +335,26 @@ def train(data_dir: Path, artifact_path: Path, *, folds: int = 5, target_fpr: fl
         "walk_forward_overall": overall,
         "target_fpr": target_fpr,
         "deployment_threshold": deployment_threshold,
+        "deployment_calibration": {
+            "target_fpr": deployment_calibration["target_fpr"],
+            "safety_margin": deployment_calibration["safety_margin"],
+        },
         "calibration_release": deployment_calibration_date,
         "calibration_releases": deployment_calibration_dates,
         "feature_count": len(columns),
+        "feature_policy": feature_policy_report(all_columns, columns),
+        "model_family": model_family,
+        "ensemble": ({
+            "xgboost_seeds": list(XGBOOST_SEEDS),
+            "extra_trees_seed": 544,
+            "weights": list(ENSEMBLE_WEIGHTS),
+            "strategy": "fixed-75pct-multiseed-xgboost-25pct-extratrees",
+        } if model_family == "ensemble" else {}),
         "feature_schema_sha256": hashlib.sha256("\n".join(columns).encode()).hexdigest(),
         "live_score_context": live_score_context(),
         "change_reason": (
-            "Live score 0.000 despite healthy accepted requests exposed unstable single-release "
-            "threshold calibration; use the strictest threshold across recent releases."
+            "Live score 0.000 despite healthy requests: add drift filtering, multi-seed "
+            "heterogeneous ensembling, bounded calibration search, and component stability."
         ),
         "training_data": (
             "Poker44 public benchmark only, projected through the validator-visible "
@@ -246,8 +376,15 @@ def main() -> None:
     parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--target-fpr", type=float, default=0.035)
+    parser.add_argument("--model-family", choices=("xgboost", "ensemble"), default="xgboost")
     args = parser.parse_args()
-    metadata = train(args.data_dir, args.artifact, folds=args.folds, target_fpr=args.target_fpr)
+    metadata = train(
+        args.data_dir,
+        args.artifact,
+        folds=args.folds,
+        target_fpr=args.target_fpr,
+        model_family=args.model_family,
+    )
     print(json.dumps(metadata, indent=2))
 
 

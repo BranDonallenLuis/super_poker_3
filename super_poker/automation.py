@@ -27,6 +27,9 @@ class Gates:
     max_ap_regression: float = 0.002
     min_fold_reward: float = 0.80
     max_fold_hard_fpr: float = 0.10
+    max_component_std_mean: float = 0.20
+    min_hard_bot_recall: float = 0.60
+    min_fold_hard_bot_recall: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -108,12 +111,28 @@ def assess_candidate(
         reasons.append("fpr_above_limit")
     if current["hard_fpr"] > gates.max_hard_fpr:
         reasons.append("hard_fpr_above_limit")
+    if current.get("hard_bot_recall", 1.0) < gates.min_hard_bot_recall:
+        reasons.append("hard_bot_recall_below_limit")
     fold_rewards = [float(fold["reward"]) for fold in candidate.get("walk_forward") or []]
     if not fold_rewards or min(fold_rewards) < gates.min_fold_reward:
         reasons.append("unstable_or_missing_walk_forward_fold")
     fold_hard_fprs = [float(fold["hard_fpr"]) for fold in candidate.get("walk_forward") or []]
     if not fold_hard_fprs or max(fold_hard_fprs) > gates.max_fold_hard_fpr:
         reasons.append("walk_forward_fold_hard_fpr_above_limit")
+    component_std_means = [
+        float(fold["component_std_mean"])
+        for fold in candidate.get("walk_forward") or []
+        if "component_std_mean" in fold
+    ]
+    if component_std_means and max(component_std_means) > gates.max_component_std_mean:
+        reasons.append("ensemble_component_disagreement_above_limit")
+    fold_hard_bot_recalls = [
+        float(fold["hard_bot_recall"])
+        for fold in candidate.get("walk_forward") or []
+        if "hard_bot_recall" in fold
+    ]
+    if fold_hard_bot_recalls and min(fold_hard_bot_recalls) < gates.min_fold_hard_bot_recall:
+        reasons.append("walk_forward_fold_hard_bot_recall_below_limit")
     if incumbent:
         previous = incumbent["walk_forward_overall"]
         if current["reward"] < previous["reward"] - gates.max_reward_regression:
@@ -177,7 +196,10 @@ def run(
         date = result["data"]["latest_source_date"]
         candidate_dir = artifacts / "candidates"
         candidate = candidate_dir / f"candidate-{date}.joblib"
-        result["candidate_metadata"] = train(data_dir, candidate)
+        model_family = os.getenv("SUPER_POKER_MODEL_FAMILY", "xgboost").strip().lower()
+        result["candidate_metadata"] = train(
+            data_dir, candidate, model_family=model_family
+        )
         incumbent = artifacts / "super_poker_3.joblib"
         decision = assess_candidate(
             result["candidate_metadata"], _metrics(incumbent.with_suffix(".metrics.json"))

@@ -103,6 +103,17 @@ Daily update plus a non-deployed candidate:
 python -m super_poker.automation daily --train-candidate
 ```
 
+The proven single-XGBoost family remains the automated default. To run the
+experimental multi-seed XGBoost + ExtraTrees challenger without deployment:
+
+```bash
+SUPER_POKER_MODEL_FAMILY=ensemble \
+python -m super_poker.automation daily --train-candidate --no-download
+```
+
+Every request logs aggregate score ranges, threshold-crossing rate, chunk-size
+range, and latency. Raw hand payloads are not persisted by this diagnostic path.
+
 Competition-cycle retraining and guarded deployment:
 
 ```bash

@@ -4,6 +4,7 @@
 
 import hashlib
 import os
+import subprocess
 import time
 from collections import Counter
 from pathlib import Path
@@ -44,12 +45,15 @@ class Miner(BaseMinerNeuron):
         artifact_sha256 = self._sha256_file(self.model_path) if self.predictor else ""
         bt.logging.info(f"Super Poker 3 miner started | backend={backend}")
         metadata = self.predictor.metadata if self.predictor is not None else {}
+        runtime_commit = self._repo_commit(repo_root)
         self.model_manifest = build_local_model_manifest(
             repo_root=repo_root,
             implementation_files=[
                 Path(__file__).resolve(),
                 repo_root / "super_poker" / "features.py",
                 repo_root / "super_poker" / "inference.py",
+                repo_root / "super_poker" / "ensemble.py",
+                repo_root / "super_poker" / "feature_policy.py",
             ],
             defaults={
                 "model_name": metadata.get("model_name", "super-poker-3-fallback"),
@@ -57,6 +61,7 @@ class Miner(BaseMinerNeuron):
                 "framework": metadata.get("framework", backend),
                 "license": "MIT",
                 "repo_url": "https://github.com/BranDonallenLuis/super_poker_3",
+                "repo_commit": runtime_commit,
                 # Set POKER44_MODEL_ARTIFACT_URL after publishing this exact
                 # artifact as a release asset.
                 "artifact_url": "",
@@ -105,6 +110,19 @@ class Miner(BaseMinerNeuron):
                 digest.update(block)
         return digest.hexdigest()
 
+    @staticmethod
+    def _repo_commit(repo_root: Path) -> str:
+        try:
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
     def _log_manifest_startup(self, repo_root: Path) -> None:
         bt.logging.info("Open-sourced miner manifest standard active for this miner.")
         bt.logging.info(
@@ -130,14 +148,29 @@ class Miner(BaseMinerNeuron):
     async def forward(self, synapse: DetectionSynapse) -> DetectionSynapse:
         """Assign one deterministic bot-risk score per chunk."""
         chunks = synapse.chunks or []
-        scores = (
-            self.predictor.predict_chunk_scores(chunks)
-            if self.predictor is not None
-            else [self.score_chunk(chunk) for chunk in chunks]
-        )
+        started = time.perf_counter()
+        if self.predictor is not None:
+            components = self.predictor.predict_chunk_components(chunks)
+            raw_scores = components["raw_scores"]
+            scores = components["final_scores"]
+        else:
+            scores = [self.score_chunk(chunk) for chunk in chunks]
+            raw_scores = scores
         synapse.risk_scores = scores
         synapse.predictions = [s >= 0.5 for s in scores]
         synapse.model_manifest = dict(self.model_manifest)
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if scores:
+            bt.logging.info(
+                "Score diagnostics | "
+                f"chunks={len(chunks)} hands_min={min(map(len, chunks), default=0)} "
+                f"hands_max={max(map(len, chunks), default=0)} "
+                f"raw_min={min(raw_scores):.4f} raw_mean={sum(raw_scores) / len(raw_scores):.4f} "
+                f"raw_max={max(raw_scores):.4f} final_min={min(scores):.4f} "
+                f"final_mean={sum(scores) / len(scores):.4f} final_max={max(scores):.4f} "
+                f"above_0_5={sum(score >= 0.5 for score in scores) / len(scores):.4f} "
+                f"latency_ms={elapsed_ms:.1f}"
+            )
         bt.logging.info(f"Scored {len(chunks)} chunks with valid bot probabilities.")
         return synapse
 

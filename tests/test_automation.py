@@ -46,6 +46,24 @@ def test_high_hard_fpr_in_any_fold_is_rejected():
     assert "walk_forward_fold_hard_fpr_above_limit" in decision["reasons"]
 
 
+def test_high_ensemble_disagreement_is_rejected():
+    candidate = metadata()
+    candidate["walk_forward"][0]["component_std_mean"] = 0.25
+    decision = assess_candidate(candidate, None, Gates())
+    assert not decision["approved"]
+    assert "ensemble_component_disagreement_above_limit" in decision["reasons"]
+
+
+def test_low_hard_bot_recall_is_rejected():
+    candidate = metadata()
+    candidate["walk_forward_overall"]["hard_bot_recall"] = 0.4
+    candidate["walk_forward"][0]["hard_bot_recall"] = 0.4
+    decision = assess_candidate(candidate, None, Gates())
+    assert not decision["approved"]
+    assert "hard_bot_recall_below_limit" in decision["reasons"]
+    assert "walk_forward_fold_hard_bot_recall_below_limit" in decision["reasons"]
+
+
 def test_promotion_backs_up_model_and_metrics(tmp_path):
     candidate = tmp_path / "candidate.joblib"
     candidate.write_bytes(b"new")

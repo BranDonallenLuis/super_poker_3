@@ -4,7 +4,12 @@ from super_poker.dataset import Example
 from super_poker.features import VISIBLE_BB_BUCKETS, _amount_bucket, chunk_features, hand_features
 import numpy as np
 
-from super_poker.train import augment_live_size_chunks, conservative_release_threshold, matrix
+from super_poker.train import (
+    augment_live_size_chunks,
+    conservative_release_threshold,
+    matrix,
+    select_calibration,
+)
 
 
 def test_empty_features_are_stable_and_finite():
@@ -89,3 +94,17 @@ def test_conservative_threshold_uses_strictest_release():
     threshold = conservative_release_threshold(scores, labels, dates, target_fpr=0.5)
 
     assert threshold == 0.85
+
+
+def test_calibration_grid_prefers_recall_over_excess_margin():
+    scores = np.asarray([0.1, 0.6, 0.2, 0.8])
+    labels = np.asarray([0, 1, 0, 1])
+    dates = np.asarray(["d1", "d1", "d2", "d2"])
+    selected = select_calibration(
+        scores,
+        labels,
+        dates,
+        target_fprs=(0.5,),
+        safety_margins=(0.05, 0.15),
+    )
+    assert selected["safety_margin"] == 0.05

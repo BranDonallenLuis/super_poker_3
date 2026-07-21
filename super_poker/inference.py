@@ -27,9 +27,9 @@ class SuperPokerModel:
             return 0.5 + 0.5 * (score - threshold) / (1 - threshold)
         return 0.5 * score / threshold
 
-    def predict_chunk_scores(self, chunks: list[list[dict]]) -> list[float]:
+    def predict_chunk_components(self, chunks: list[list[dict]]) -> dict[str, list[float]]:
         if not chunks:
-            return []
+            return {"raw_scores": [], "final_scores": []}
         frame = pd.DataFrame([chunk_features(chunk) for chunk in chunks])
         frame = frame.reindex(columns=self.feature_names, fill_value=0.0).fillna(0.0)
         raw = self.model.predict_proba(frame.astype(float))[:, 1]
@@ -37,4 +37,10 @@ class SuperPokerModel:
         for value in raw:
             score = self._remap(float(value), self.threshold)
             scores.append(round(min(1.0, max(0.0, score)) if math.isfinite(score) else 0.5, 6))
-        return scores
+        return {
+            "raw_scores": [round(float(value), 6) for value in raw],
+            "final_scores": scores,
+        }
+
+    def predict_chunk_scores(self, chunks: list[list[dict]]) -> list[float]:
+        return self.predict_chunk_components(chunks)["final_scores"]
