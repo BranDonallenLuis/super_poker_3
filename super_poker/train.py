@@ -271,11 +271,11 @@ def train(
     augmented = augment_live_size_chunks(examples)
     training_examples = examples + augmented
     all_frame, all_columns = matrix(training_examples)
-    columns = (
-        validator_stable_features(all_columns)
-        if model_family == "ensemble"
-        else all_columns
-    )
+    # The drift policy applies to every model family. Payload-unstable features
+    # (hero_*, stack_*, showdown_*, player_count, seat_utilization, hand_count)
+    # are dropped before fitting: showdown_* in particular is hardcoded False by
+    # the validator's payload sanitizer, so it is constant at inference time.
+    columns = validator_stable_features(all_columns)
     all_frame = all_frame.reindex(columns=columns, fill_value=0.0)
     labels = np.asarray([example.label for example in training_examples], dtype=int)
     date_array = np.asarray([example.source_date for example in training_examples])
@@ -359,9 +359,9 @@ def train(
             "super-poker-3.v6-ensemble-drift-policy"
             if model_family == "ensemble"
             else (
-                "super-poker-3.v7-full-feature-xgboost-ensemble"
+                "super-poker-3.v8-xgboost-ensemble-drift-policy"
                 if model_family == "xgb_ensemble"
-                else "super-poker-3.v6-xgboost-safe-default"
+                else "super-poker-3.v8-xgboost-drift-policy"
             )
         ),
         "example_count": len(examples),
