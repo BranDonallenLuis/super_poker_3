@@ -1,0 +1,19 @@
+[Unit]
+Description=Super Poker 3 daily non-deploying candidate training
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/super_poker_3
+Environment=SUPER_POKER_PYTHON=/root/super_poker_3/.venv/bin/python
+Environment=SUPER_POKER_DATA_DIR=/root/super_poker_3/data/raw
+Environment=SUPER_POKER_MODEL_FAMILY=xgboost
+Environment=SUPER_POKER_XGB_PROFILE=robust
+ExecStart=/usr/bin/nice -n 10 /root/super_poker_3/scripts/model/vps_daily_candidate.sh
+CPUQuota=40%
+IOSchedulingClass=idle
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

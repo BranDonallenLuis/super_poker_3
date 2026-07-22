@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Super Poker 3 candidate training once daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=super-poker-3-daily-candidate.service
+
+[Install]
+WantedBy=timers.target

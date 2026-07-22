@@ -220,4 +220,5 @@ artifacts/*.json
 artifacts/candidates/
 artifacts/backups/
 artifacts/approved/
+artifacts/daily-history/
 logs/

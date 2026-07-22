@@ -142,17 +142,38 @@ Rejected candidates remain under `artifacts/candidates/`. Approved candidates ar
 the incumbent to `artifacts/backups/` and atomically replaces the serving artifact.
 The latest decision is recorded in `artifacts/automation-state.json`.
 
-To schedule with cron while using the existing Poker44 environment:
+### VPS daily candidate training
 
-```cron
-15 1 * * * SUPER_POKER_PYTHON=/home/achilles/Projects/Poker44-subnet/.venv/bin/python /home/achilles/Projects/super-poker-3/scripts/model/daily_learning.sh --train-candidate
-15 * * * * SUPER_POKER_PYTHON=/home/achilles/Projects/Poker44-subnet/.venv/bin/python /home/achilles/Projects/super-poker-3/scripts/model/cycle_learning.sh
+The preferred production schedule downloads the latest public release, trains a candidate,
+evaluates it, and records the decision without changing the serving artifact or restarting PM2.
+Choose a UTC time after the daily evaluation normally finishes, then install the supplied units:
+
+```bash
+sudo cp scripts/model/super-poker-3-daily-candidate.service /etc/systemd/system/
+sudo cp scripts/model/super-poker-3-daily-candidate.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now super-poker-3-daily-candidate.timer
 ```
 
-The plain daily CLI only downloads and inspects by default. The installed cron command includes
-`--train-candidate`, so it also trains and records a candidate without deploying it. Do not
-schedule other training jobs during the six-hour pre-competition window. The hourly cycle check
-is inexpensive outside that window and records each cycle completion so it cannot deploy twice.
+The checked-in service expects the VPS checkout at `/root/super_poker_3` and its Python at
+`/root/super_poker_3/.venv/bin/python`. Adjust those paths before installation when necessary.
+The timer defaults to `03:15 UTC`, uses a five-minute randomized delay, and limits training to 40%
+CPU with idle I/O priority. Confirm that this time does not overlap the subnet's daily evaluation.
+
+```bash
+systemctl list-timers super-poker-3-daily-candidate.timer
+journalctl -u super-poker-3-daily-candidate.service -n 100 --no-pager
+jq '{deployed, decision, data}' artifacts/automation-state.json
+```
+
+`vps_daily_candidate.sh` uses `flock` to prevent overlapping runs, archives each decision under
+`artifacts/daily-history/`, and fails if daily mode changes the incumbent artifact hash. It never
+restarts PM2. An approved candidate still requires a manual source/artifact/manifest review and
+an explicit deployment decision between locked Poker44 v2.0 rounds.
+
+Do not schedule `weekly_learning.sh` or `cycle_learning.sh` unattended on a competition miner;
+those modes can promote an approved artifact. `scripts/model/crontab` contains a legacy,
+non-deploying cron alternative for hosts that do not use systemd.
 
 ## License
 
