@@ -1,5 +1,5 @@
-# Legacy cron alternative. The VPS systemd timer is preferred because it limits CPU usage.
-# This job downloads data and evaluates a candidate; daily mode never promotes it.
-15 3 * * * SUPER_POKER_PYTHON=/root/super_poker_3/.venv/bin/python SUPER_POKER_DATA_DIR=/root/super_poker_3/data/raw /root/super_poker_3/scripts/model/vps_daily_candidate.sh >> /root/super_poker_3/logs/daily-candidate-cron.log 2>&1
+# Super Poker 3: refresh the public benchmark every day at 01:15.
+15 1 * * * SUPER_POKER_PYTHON=/home/achilles/Projects/Poker44-subnet/.venv/bin/python /home/achilles/Projects/super-poker-3/scripts/model/daily_learning.sh --train-candidate
 
-# Do not schedule weekly_learning.sh or cycle_learning.sh unattended on a competition miner.
+# Check hourly; train/deploy once, six hours before each 120-hour competition start.
+15 * * * * SUPER_POKER_PYTHON=/home/achilles/Projects/Poker44-subnet/.venv/bin/python /home/achilles/Projects/super-poker-3/scripts/model/cycle_learning.sh
