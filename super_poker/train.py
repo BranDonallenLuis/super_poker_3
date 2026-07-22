@@ -31,6 +31,7 @@ CALIBRATION_RELEASES = 3
 CALIBRATION_SAFETY_MARGIN = 0.10
 XGBOOST_SEEDS = (44, 144, 244)
 ENSEMBLE_WEIGHTS = (0.25, 0.25, 0.25, 0.25)
+XGBOOST_ENSEMBLE_WEIGHTS = (1 / 3, 1 / 3, 1 / 3)
 CALIBRATION_TARGET_GRID = (0.01, 0.02, 0.035)
 CALIBRATION_MARGIN_GRID = (0.05, 0.10, 0.15)
 XGBOOST_PROFILES = {
@@ -83,6 +84,15 @@ def make_ensemble(seed_offset: int = 0) -> ProbabilityEnsemble:
     return ProbabilityEnsemble(models, ENSEMBLE_WEIGHTS)
 
 
+def make_xgboost_ensemble(
+    seed_offset: int = 0, profile: str = "baseline"
+) -> ProbabilityEnsemble:
+    return ProbabilityEnsemble(
+        [make_model(seed + seed_offset, profile) for seed in XGBOOST_SEEDS],
+        XGBOOST_ENSEMBLE_WEIGHTS,
+    )
+
+
 def build_model(
     model_family: str, seed_offset: int = 0, xgb_profile: str = "baseline"
 ) -> object:
@@ -90,6 +100,8 @@ def build_model(
         return make_model(44 + seed_offset, xgb_profile)
     if model_family == "ensemble":
         return make_ensemble(seed_offset)
+    if model_family == "xgb_ensemble":
+        return make_xgboost_ensemble(seed_offset, xgb_profile)
     raise ValueError(f"Unknown model family: {model_family}")
 
 
@@ -337,12 +349,20 @@ def train(
         "framework": (
             "multi-seed-xgboost+extratrees-fixed-blend"
             if model_family == "ensemble"
-            else "xgboost+chronological-calibration-search"
+            else (
+                "multi-seed-xgboost-fixed-blend"
+                if model_family == "xgb_ensemble"
+                else "xgboost+chronological-calibration-search"
+            )
         ),
         "feature_version": (
             "super-poker-3.v6-ensemble-drift-policy"
             if model_family == "ensemble"
-            else "super-poker-3.v6-xgboost-safe-default"
+            else (
+                "super-poker-3.v7-full-feature-xgboost-ensemble"
+                if model_family == "xgb_ensemble"
+                else "super-poker-3.v6-xgboost-safe-default"
+            )
         ),
         "example_count": len(examples),
         "augmented_example_count": len(augmented),
@@ -368,12 +388,24 @@ def train(
         "model_family": model_family,
         "xgboost_profile": xgb_profile,
         "xgboost_parameters": XGBOOST_PROFILES[xgb_profile],
-        "ensemble": ({
-            "xgboost_seeds": list(XGBOOST_SEEDS),
-            "extra_trees_seed": 544,
-            "weights": list(ENSEMBLE_WEIGHTS),
-            "strategy": "fixed-75pct-multiseed-xgboost-25pct-extratrees",
-        } if model_family == "ensemble" else {}),
+        "ensemble": (
+            {
+                "xgboost_seeds": list(XGBOOST_SEEDS),
+                "extra_trees_seed": 544,
+                "weights": list(ENSEMBLE_WEIGHTS),
+                "strategy": "fixed-75pct-multiseed-xgboost-25pct-extratrees",
+            }
+            if model_family == "ensemble"
+            else (
+                {
+                    "xgboost_seeds": list(XGBOOST_SEEDS),
+                    "weights": list(XGBOOST_ENSEMBLE_WEIGHTS),
+                    "strategy": "fixed-equal-weight-multiseed-xgboost",
+                }
+                if model_family == "xgb_ensemble"
+                else {}
+            )
+        ),
         "feature_schema_sha256": hashlib.sha256("\n".join(columns).encode()).hexdigest(),
         "live_score_context": live_score_context(),
         "change_reason": (
@@ -401,7 +433,11 @@ def main() -> None:
     parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--target-fpr", type=float, default=0.035)
-    parser.add_argument("--model-family", choices=("xgboost", "ensemble"), default="xgboost")
+    parser.add_argument(
+        "--model-family",
+        choices=("xgboost", "ensemble", "xgb_ensemble"),
+        default="xgboost",
+    )
     parser.add_argument("--xgb-profile", choices=tuple(XGBOOST_PROFILES), default="baseline")
     args = parser.parse_args()
     metadata = train(

@@ -4,7 +4,7 @@ import numpy as np
 from super_poker.ensemble import ProbabilityEnsemble
 from super_poker.feature_policy import validator_stable_features
 from super_poker.inference import SuperPokerModel
-from super_poker.train import make_model
+from super_poker.train import make_model, make_xgboost_ensemble
 
 
 class FixedModel:
@@ -48,3 +48,9 @@ def test_xgboost_profiles_are_explicit_and_validated():
         assert "Unknown XGBoost profile" in str(exc)
     else:
         raise AssertionError("unknown profile should fail")
+
+
+def test_xgboost_ensemble_uses_only_declared_xgboost_seeds():
+    ensemble = make_xgboost_ensemble(profile="robust")
+    assert len(ensemble.models) == 3
+    assert all(model.get_params()["n_estimators"] == 320 for model in ensemble.models)
