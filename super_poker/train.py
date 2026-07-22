@@ -33,18 +33,35 @@ XGBOOST_SEEDS = (44, 144, 244)
 ENSEMBLE_WEIGHTS = (0.25, 0.25, 0.25, 0.25)
 CALIBRATION_TARGET_GRID = (0.01, 0.02, 0.035)
 CALIBRATION_MARGIN_GRID = (0.05, 0.10, 0.15)
+XGBOOST_PROFILES = {
+    "baseline": {
+        "n_estimators": 200,
+        "learning_rate": 0.03,
+        "max_depth": 3,
+        "min_child_weight": 5,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.5,
+        "reg_lambda": 2.0,
+    },
+    "robust": {
+        "n_estimators": 320,
+        "learning_rate": 0.025,
+        "max_depth": 3,
+        "min_child_weight": 4,
+        "subsample": 0.85,
+        "colsample_bytree": 0.9,
+        "reg_alpha": 0.4,
+        "reg_lambda": 3.0,
+    },
+}
 
 
-def make_model(seed: int = 44) -> XGBClassifier:
+def make_model(seed: int = 44, profile: str = "baseline") -> XGBClassifier:
+    if profile not in XGBOOST_PROFILES:
+        raise ValueError(f"Unknown XGBoost profile: {profile}")
     return XGBClassifier(
-        n_estimators=200,
-        learning_rate=0.03,
-        max_depth=3,
-        min_child_weight=5,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.5,
-        reg_lambda=2.0,
+        **XGBOOST_PROFILES[profile],
         objective="binary:logistic",
         eval_metric="logloss",
         tree_method="hist",
@@ -66,9 +83,11 @@ def make_ensemble(seed_offset: int = 0) -> ProbabilityEnsemble:
     return ProbabilityEnsemble(models, ENSEMBLE_WEIGHTS)
 
 
-def build_model(model_family: str, seed_offset: int = 0) -> object:
+def build_model(
+    model_family: str, seed_offset: int = 0, xgb_profile: str = "baseline"
+) -> object:
     if model_family == "xgboost":
-        return make_model(44 + seed_offset)
+        return make_model(44 + seed_offset, xgb_profile)
     if model_family == "ensemble":
         return make_ensemble(seed_offset)
     raise ValueError(f"Unknown model family: {model_family}")
@@ -225,6 +244,7 @@ def train(
     folds: int = 5,
     target_fpr: float = 0.035,
     model_family: str = "xgboost",
+    xgb_profile: str = "baseline",
 ) -> dict:
     examples = load_examples(data_dir)
     dates = sorted({example.source_date for example in examples})
@@ -258,7 +278,7 @@ def train(
         test_mask = real_dates == test_date
         if train_mask.sum() < 60 or len(set(labels[train_mask])) < 2:
             continue
-        model = build_model(model_family, fold_index * 1000)
+        model = build_model(model_family, fold_index * 1000, xgb_profile)
         fit_model(model, all_frame.loc[train_mask], labels[train_mask])
         raw_test = model.predict_proba(all_frame.iloc[:real_count].loc[test_mask])[:, 1]
 
@@ -266,7 +286,9 @@ def train(
         calibration_dates = earlier_dates[-CALIBRATION_RELEASES:]
         inner_fit = date_array < calibration_dates[0]
         inner_cal = np.isin(real_dates, calibration_dates)
-        inner_model = build_model(model_family, 10000 + fold_index * 1000)
+        inner_model = build_model(
+            model_family, 10000 + fold_index * 1000, xgb_profile
+        )
         fit_model(inner_model, all_frame.loc[inner_fit], labels[inner_fit])
         calibration_scores = inner_model.predict_proba(all_frame.iloc[:real_count].loc[inner_cal])[:, 1]
         calibration = select_calibration(
@@ -296,7 +318,7 @@ def train(
     deployment_calibration_date = deployment_calibration_dates[-1]
     deployment_fit = date_array < deployment_calibration_dates[0]
     calibration_mask = np.isin(real_dates, deployment_calibration_dates)
-    calibration_model = build_model(model_family, 20000)
+    calibration_model = build_model(model_family, 20000, xgb_profile)
     fit_model(calibration_model, all_frame.loc[deployment_fit], labels[deployment_fit])
     calibration_scores = calibration_model.predict_proba(all_frame.iloc[:real_count].loc[calibration_mask])[:, 1]
     deployment_calibration = select_calibration(
@@ -307,7 +329,7 @@ def train(
     )
     deployment_threshold = deployment_calibration["threshold"]
 
-    final_model = build_model(model_family, 30000)
+    final_model = build_model(model_family, 30000, xgb_profile)
     fit_model(final_model, all_frame, labels)
     metadata = {
         "model_name": "super-poker-3-xgboost-enhanced",
@@ -344,6 +366,8 @@ def train(
         "feature_count": len(columns),
         "feature_policy": feature_policy_report(all_columns, columns),
         "model_family": model_family,
+        "xgboost_profile": xgb_profile,
+        "xgboost_parameters": XGBOOST_PROFILES[xgb_profile],
         "ensemble": ({
             "xgboost_seeds": list(XGBOOST_SEEDS),
             "extra_trees_seed": 544,
@@ -378,6 +402,7 @@ def main() -> None:
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--target-fpr", type=float, default=0.035)
     parser.add_argument("--model-family", choices=("xgboost", "ensemble"), default="xgboost")
+    parser.add_argument("--xgb-profile", choices=tuple(XGBOOST_PROFILES), default="baseline")
     args = parser.parse_args()
     metadata = train(
         args.data_dir,
@@ -385,6 +410,7 @@ def main() -> None:
         folds=args.folds,
         target_fpr=args.target_fpr,
         model_family=args.model_family,
+        xgb_profile=args.xgb_profile,
     )
     print(json.dumps(metadata, indent=2))
 

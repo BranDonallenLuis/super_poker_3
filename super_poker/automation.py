@@ -197,8 +197,9 @@ def run(
         candidate_dir = artifacts / "candidates"
         candidate = candidate_dir / f"candidate-{date}.joblib"
         model_family = os.getenv("SUPER_POKER_MODEL_FAMILY", "xgboost").strip().lower()
+        xgb_profile = os.getenv("SUPER_POKER_XGB_PROFILE", "baseline").strip().lower()
         result["candidate_metadata"] = train(
-            data_dir, candidate, model_family=model_family
+            data_dir, candidate, model_family=model_family, xgb_profile=xgb_profile
         )
         incumbent = artifacts / "super_poker_3.joblib"
         decision = assess_candidate(

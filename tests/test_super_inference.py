@@ -4,6 +4,7 @@ import numpy as np
 from super_poker.ensemble import ProbabilityEnsemble
 from super_poker.feature_policy import validator_stable_features
 from super_poker.inference import SuperPokerModel
+from super_poker.train import make_model
 
 
 class FixedModel:
@@ -37,3 +38,13 @@ def test_probability_ensemble_normalizes_weights():
 def test_feature_policy_drops_known_drift_fields():
     names = ["hand_count", "hero_raise_share_mean", "actor_entropy_mean", "table_fold_share_q50"]
     assert validator_stable_features(names) == ["actor_entropy_mean", "table_fold_share_q50"]
+
+
+def test_xgboost_profiles_are_explicit_and_validated():
+    assert make_model(profile="robust").get_params()["n_estimators"] == 320
+    try:
+        make_model(profile="unknown")
+    except ValueError as exc:
+        assert "Unknown XGBoost profile" in str(exc)
+    else:
+        raise AssertionError("unknown profile should fail")
