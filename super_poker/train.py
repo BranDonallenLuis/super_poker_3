@@ -353,8 +353,9 @@ def train(
         "feature_schema_sha256": hashlib.sha256("\n".join(columns).encode()).hexdigest(),
         "live_score_context": live_score_context(),
         "change_reason": (
-            "Live score 0.000 despite healthy requests: add drift filtering, multi-seed "
-            "heterogeneous ensembling, bounded calibration search, and component stability."
+            "Competition 6 R2 scored 0.527 with stable serving. Evaluate drift filtering, "
+            "multi-seed heterogeneous ensembling, bounded calibration search, and component "
+            "stability against the incumbent without treating the aggregate score as a label."
         ),
         "training_data": (
             "Poker44 public benchmark only, projected through the validator-visible "
